@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -323,9 +324,23 @@ func followProfile(c *gin.Context) {
 }
 
 func unfollowProfile(c *gin.Context) {
-	c.JSON(200, gin.H{
-		"message": "pong",
-	})
+	c.JSON(200, gin.H{"token": authApi(c)})
+	username := c.Param("username")
+	var user User
+	getDB().First(&user, "username=?", username)
+	type Result struct {
+		Count uint
+	}
+	var result Result
+	getDB().Raw("SELECT COUNT(*) FROM followers WHERE user_id=? AND follower_id=?", user.ID).Scan(&result)
+	if result.Count == 0 {
+		c.JSON(402, gin.H{"error": "Unathorized"})
+		c.Abort()
+	}
+	getDB().Raw("DELETE FROM followers WHERE user_id=? AND follower_id=?", user.ID)
+	// c.JSON(200, gin.H{
+	// 	"profile": Profile{},
+	// })
 }
 
 func getTags(c *gin.Context) {
@@ -338,19 +353,25 @@ func getTags(c *gin.Context) {
 
 func authApi(c *gin.Context) *jwt.Token {
 	tokenString := c.Request.Header.Get("Authorization")
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+	type MyCustomClaims struct {
+		UserId uint64 `json:"user_id"`
+		jwt.StandardClaims
+	}
+	bearerToken := strings.Split(tokenString, " ")
+
+	token, err := jwt.ParseWithClaims(bearerToken[1], &MyCustomClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if jwt.GetSigningMethod("HS256") != token.Method {
 			return nil, fmt.Errorf("Unexpected signing method: %v", token.Header["alg"])
 		}
 
-		return []byte("secret"), nil
+		return []byte(os.Getenv("JWT_SECRET")), nil
 	})
-	if token == nil && err == nil {
+
+	if token == nil || err == nil || !token.Valid {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"message": "not authorized",
 			"error":   err.Error(),
 		})
-		c.Abort()
 	}
 
 	return token
